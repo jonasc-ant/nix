@@ -588,7 +588,8 @@ std::vector<KeyedBuildResult> RemoteStore::buildPathsWithResults(
 
         // Note: this throws an exception if a build/substitution
         // fails, but meh.
-        buildPaths(paths, buildMode, evalStore);
+        // copyDrvsFromEvalStore already ran above; nullptr skips the redundant copy.
+        buildPaths(paths, buildMode, nullptr);
 
         std::vector<KeyedBuildResult> results;
 
