@@ -285,6 +285,13 @@ RemoteStore::queryPartialDerivationOutputMap(const StorePath & path, Store * eva
         } else {
             auto & evalStore = *evalStore_;
             auto outputs = evalStore.queryStaticPartialDerivationOutputMap(path);
+            // For input-addressed derivations the static map is complete;
+            // skip the remote round-trip unless CA derivations are in play.
+            if (!experimentalFeatureSettings.isEnabled(Xp::CaDerivations)) {
+                bool complete = std::all_of(outputs.begin(), outputs.end(),
+                    [](auto & p) { return p.second.has_value(); });
+                if (complete) return outputs;
+            }
             // union with the first branch overriding the statically-known ones
             // when non-`std::nullopt`.
             for (auto && [outputName, optPath] : queryPartialDerivationOutputMap(path, nullptr)) {
