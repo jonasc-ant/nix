@@ -692,7 +692,8 @@ struct FramedSink : nix::BufferedSink
     fun<void()> checkError;
 
     FramedSink(BufferedSink & to, fun<void()> && checkError)
-        : to(to)
+        : BufferedSink(256 * 1024)
+        , to(to)
         , checkError(checkError)
     {
     }
