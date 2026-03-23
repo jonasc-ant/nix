@@ -52,19 +52,25 @@ void printGCWarning()
         "the result might be removed by the garbage collector");
 }
 
-void printMissing(ref<Store> store, const std::vector<DerivedPath> & paths, Verbosity lvl)
+void printMissing(
+    ref<Store> store, const std::vector<DerivedPath> & paths, Verbosity lvl, std::shared_ptr<Store> evalStore)
 {
-    printMissing(store, store->queryMissing(paths), lvl);
+    printMissing(store, store->queryMissing(paths), lvl, evalStore);
 }
 
-void printMissing(ref<Store> store, const MissingPaths & missing, Verbosity lvl)
+void printMissing(
+    ref<Store> store, const MissingPaths & missing, Verbosity lvl, std::shared_ptr<Store> evalStore)
 {
     if (!missing.willBuild.empty()) {
         if (missing.willBuild.size() == 1)
             printMsg(lvl, "this derivation will be built:");
         else
             printMsg(lvl, "these %d derivations will be built:", missing.willBuild.size());
-        auto sorted = store->topoSortPaths(missing.willBuild);
+        /* willBuild paths are .drv files the remote doesn't have yet; sort
+           on evalStore (which evaluated them) to avoid N remote round-trips
+           that all return InvalidPath anyway. */
+        auto & sortStore = evalStore ? *evalStore : *store;
+        auto sorted = sortStore.topoSortPaths(missing.willBuild);
         reverse(sorted.begin(), sorted.end());
         for (auto & i : sorted)
             printMsg(lvl, "  %s", store->printStorePath(i));
