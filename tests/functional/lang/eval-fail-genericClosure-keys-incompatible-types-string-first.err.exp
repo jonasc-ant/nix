@@ -1,0 +1,12 @@
+error:
+       … while calling the 'genericClosure' builtin
+         at /pwd/lang/eval-fail-genericClosure-keys-incompatible-types-string-first.nix:1:1:
+            1| builtins.genericClosure {
+             | ^
+            2|   startSet = [
+
+       … while comparing element { key = 1; }
+
+       … with element { key = "string"; }
+
+       error: cannot compare an integer with a string; values are 1 and "string"

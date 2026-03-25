@@ -22,6 +22,7 @@
 #include <boost/container/small_vector.hpp>
 #include <boost/unordered/concurrent_flat_map.hpp>
 #include <boost/unordered/unordered_flat_map.hpp>
+#include <boost/unordered/unordered_flat_set.hpp>
 #include <nlohmann/json.hpp>
 
 #include <sys/types.h>
@@ -815,9 +816,13 @@ static void prim_genericClosure(EvalState & state, const PosIdx pos, Value ** ar
        `workSet', adding the result to `workSet', continuing until
        no new elements are found. */
     ValueList res;
-    // Track which element each key came from
     auto cmp = CompareValues(state, noPos, "");
-    std::map<Value *, Value *, decltype(cmp)> keyToElem(cmp);
+    // Fast path for all-string keys (the common case, e.g. the NixOS module
+    // system): hash set gives O(1) dedup instead of the ordered map's O(log n).
+    std::optional<boost::unordered_flat_set<std::string_view>> seenStrings;
+    // Generic path, tracking which element each key came from. Populated
+    // lazily on the first non-string key.
+    std::optional<std::map<Value *, Value *, decltype(cmp)>> keyToElem;
     while (!workSet.empty()) {
         Value * e = *(workSet.begin());
         workSet.pop_front();
@@ -838,31 +843,51 @@ static void prim_genericClosure(EvalState & state, const PosIdx pos, Value ** ar
         }
         state.forceValue(*key->value, noPos);
 
-        try {
-            auto [it, inserted] = keyToElem.insert({key->value, e});
-            if (!inserted)
+        if (!keyToElem && key->value->type() == nString) {
+            if (!seenStrings)
+                seenStrings.emplace();
+            if (!seenStrings->insert(key->value->string_view()).second)
                 continue;
-        } catch (Error & err) {
-            // Try to find which element we're comparing against
-            Value * otherElem = nullptr;
-            for (auto & [otherKey, elem] : keyToElem) {
-                try {
-                    cmp(key->value, otherKey);
-                } catch (Error &) {
-                    // Found the element we're comparing against
-                    otherElem = elem;
-                    break;
+        } else {
+            try {
+                if (!keyToElem) {
+                    keyToElem.emplace(cmp);
+                    // If we already accepted string keys, this non-string key
+                    // is a type mix; let CompareValues produce the error.
+                    if (seenStrings) {
+                        auto firstKey = state.getAttr(state.s.key, res.front()->attrs(), "");
+                        cmp(key->value, firstKey->value);
+                    }
                 }
+                auto [it, inserted] = keyToElem->insert({key->value, e});
+                if (!inserted)
+                    continue;
+            } catch (Error & err) {
+                // Try to find which element we're comparing against
+                Value * otherElem = nullptr;
+                if (seenStrings) {
+                    otherElem = res.front();
+                } else {
+                    for (auto & [otherKey, elem] : *keyToElem) {
+                        try {
+                            cmp(key->value, otherKey);
+                        } catch (Error &) {
+                            // Found the element we're comparing against
+                            otherElem = elem;
+                            break;
+                        }
+                    }
+                }
+                if (otherElem) {
+                    // Traces are printed in reverse order; pre-swap them.
+                    err.addTrace(nullptr, "with element %s", ValuePrinter(state, *otherElem, errorPrintOptions));
+                    err.addTrace(nullptr, "while comparing element %s", ValuePrinter(state, *e, errorPrintOptions));
+                } else {
+                    // Couldn't find the specific element, just show current
+                    err.addTrace(nullptr, "while checking key of element %s", ValuePrinter(state, *e, errorPrintOptions));
+                }
+                throw;
             }
-            if (otherElem) {
-                // Traces are printed in reverse order; pre-swap them.
-                err.addTrace(nullptr, "with element %s", ValuePrinter(state, *otherElem, errorPrintOptions));
-                err.addTrace(nullptr, "while comparing element %s", ValuePrinter(state, *e, errorPrintOptions));
-            } else {
-                // Couldn't find the specific element, just show current
-                err.addTrace(nullptr, "while checking key of element %s", ValuePrinter(state, *e, errorPrintOptions));
-            }
-            throw;
         }
         res.push_back(e);
 
